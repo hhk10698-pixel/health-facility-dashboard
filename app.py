@@ -8,24 +8,22 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+
 st.set_page_config(
     page_title="National Health Facility Map",
     layout="wide",
     page_icon="map",
 )
 
-# ==========================================
-# 🛑 REPLACE THIS WITH YOUR GITHUB RAW URL
-# ==========================================
+# --- NEW GITHUB URL ---
 MASTER_CSV_URL = "https://raw.githubusercontent.com/hhk10698-pixel/health-facility-dashboard/main/master_health_facilities.csv"
 
-# Directory for state-specific files (if you are still keeping those locally)
 DATA_DIR = Path(r"C:\Users\hari\OneDrive\Desktop\Functional PHF")
-
 GEOJSON_URL = (
     "https://gist.githubusercontent.com/jbrobst/56c13bbbf9d97d187fea01ca62ea5112/"
     "raw/e388c4cae20aa53cb5090210a42ebb9b765c0a36/india_states.geojson"
 )
+
 
 STATE_NAME_MAP = {
     "Arunachal": "Arunachal Pradesh",
@@ -36,6 +34,7 @@ STATE_NAME_MAP = {
     "Andaman and Nicobar Islands": "Andaman & Nicobar",
     "Andaman & Nicobar Islands": "Andaman & Nicobar",
 }
+
 
 def normalize_state_name(name):
     if name is None:
@@ -49,10 +48,11 @@ def load_geojson():
     with urlopen(GEOJSON_URL) as response:
         return json.load(response)
 
+
+# --- UPDATED TO LOAD FROM GITHUB ---
 @st.cache_data
 def load_master_data_from_github(url):
     try:
-        # Pandas can read directly from a URL!
         df = pd.read_csv(url)
         if "Name of State/UTs" in df.columns:
             df["Name of State/UTs"] = df["Name of State/UTs"].map(normalize_state_name)
@@ -61,17 +61,17 @@ def load_master_data_from_github(url):
         st.error(f"Failed to load master dataset from GitHub. Error: {e}")
         return pd.DataFrame()
 
+
 @st.cache_data
 def geojson_state_list():
     geojson = load_geojson()
     states = sorted({feature["properties"]["ST_NM"] for feature in geojson["features"]})
     return states
 
+
 @st.cache_data
 def state_file_map():
     result = {}
-    if not DATA_DIR.exists():
-        return result
     for file_path in DATA_DIR.glob("*"):
         if not file_path.is_file():
             continue
@@ -83,6 +83,7 @@ def state_file_map():
         result[state_name] = file_path
     return result
 
+
 @st.cache_data
 def load_state_file(path_str):
     path = Path(path_str)
@@ -90,41 +91,46 @@ def load_state_file(path_str):
         return pd.read_csv(path)
     return pd.read_excel(path)
 
+
 @st.cache_data
 def build_state_files_zip():
     zip_buffer = io.BytesIO()
-    if DATA_DIR.exists():
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file_path in sorted(DATA_DIR.glob("*")):
-                if not file_path.is_file():
-                    continue
-                if file_path.name.lower() == "master_health_facilities.csv":
-                    continue
-                if file_path.suffix.lower() not in [".xlsx", ".xls", ".csv"]:
-                    continue
-                zf.write(file_path, arcname=file_path.name)
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(DATA_DIR.glob("*")):
+            if not file_path.is_file():
+                continue
+            if file_path.name.lower() == "master_health_facilities.csv":
+                continue
+            if file_path.suffix.lower() not in [".xlsx", ".xls", ".csv"]:
+                continue
+            zf.write(file_path, arcname=file_path.name)
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
+
 
 def format_breakdown(group):
     counts = group.value_counts().head(8)
     return ", ".join([f"{k}: {v}" for k, v in counts.items()])
 
 
-# --- DATA LOADING ---
+# --- INJECTED GITHUB LOADING LOGIC ---
 with st.spinner("Fetching data from GitHub..."):
     master_df = load_master_data_from_github(MASTER_CSV_URL)
 
 if master_df.empty:
-    st.error("Could not load the dataset. Please double-check that your `MASTER_CSV_URL` is a valid, raw GitHub URL.")
+    st.error(
+        f"Master dataset could not be loaded from GitHub URL: {MASTER_CSV_URL}"
+    )
     st.stop()
 
 if "Name of Facility" not in master_df.columns or "Type of Facility (Category)" not in master_df.columns:
-    st.error("Required columns missing in master dataset. Needed: 'Name of Facility' and 'Type of Facility (Category)'.")
+    st.error(
+        "Required columns missing in master CSV. Needed: 'Name of Facility' and "
+        "'Type of Facility (Category)'."
+    )
     st.stop()
 
 
-# --- APP RENDERING ---
 india_geojson = load_geojson()
 all_geojson_states = geojson_state_list()
 state_files = state_file_map()
@@ -177,7 +183,8 @@ else:
     with m2:
         st.metric("Total Districts", f"{total_districts}")
 
-# Generate CSV download directly from the fetched dataframe
+
+# --- UPDATED MASTER DOWNLOAD BUTTON ---
 csv_data = master_df.to_csv(index=False).encode('utf-8')
 st.download_button(
     label="Download master_health_facilities.csv",
@@ -185,6 +192,7 @@ st.download_button(
     file_name="master_health_facilities.csv",
     mime="text/csv",
 )
+
 
 type_breakdown_df = (
     master_df.groupby("Name of State/UTs")["Type of Facility (Category)"]
@@ -273,7 +281,7 @@ else:
         raw_df = load_state_file(str(state_path))
     else:
         raw_df = filtered_df
-        st.warning(f"Local state source file not found for {selected_state} in {DATA_DIR}")
+        st.warning(f"State source file not found for {selected_state} in {DATA_DIR}")
 st.dataframe(raw_df, width='stretch')
 
 if selected_state == "All India":
@@ -359,6 +367,7 @@ else:
             title=f"{selected_state}: Facility Type Breakup",
         )
         st.plotly_chart(pie_fig, width='stretch')
+        st.info("District column not found, so district-wise stacked chart cannot be shown.")
     else:
         district_stack_df = (
             filtered_df.assign(
