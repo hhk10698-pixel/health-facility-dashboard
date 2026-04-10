@@ -231,7 +231,10 @@ red_green_scale = [
     [1.00, "#1b5e20"],
 ]
 
-map_fig = px.choropleth(
+# =====================================================================
+# --- UPDATED MAP CODE (Using Mapbox for reliable custom GeoJSON rendering) ---
+# =====================================================================
+map_fig = px.choropleth_mapbox(
     map_data,
     geojson=india_geojson,
     featureidkey="properties.ST_NM",
@@ -247,12 +250,18 @@ map_fig = px.choropleth(
         "MapValue": False,
         "State": False,
     },
+    mapbox_style="carto-positron", # Free, light-themed mapbox style
+    center={"lat": 22.9, "lon": 79.0}, # Centered on India
+    zoom=3.5, # Adjusted zoom for full view
+    opacity=0.8
 )
-map_fig.update_geos(fitbounds="locations", visible=False)
 map_fig.update_layout(height=680, margin={"r": 0, "t": 0, "l": 0, "b": 0})
+# =====================================================================
+
 if selected_state == "All India":
     st.subheader("India Facility Density Map")
-    st.plotly_chart(map_fig, width='stretch')
+    # Swapped to use_container_width=True for robust rendering across older/newer streamlit versions
+    st.plotly_chart(map_fig, use_container_width=True) 
     st.markdown("---")
 
 st.subheader(f"Facility Distribution: {selected_state}")
