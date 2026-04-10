@@ -17,7 +17,7 @@ st.set_page_config(
 # ==========================================
 # 🛑 REPLACE THIS WITH YOUR GITHUB RAW URL
 # ==========================================
-MASTER_CSV_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/master_health_facilities.csv"
+MASTER_CSV_URL = "https://raw.githubusercontent.com/hhk10698-pixel/health-facility-dashboard/main/master_health_facilities.csv"
 
 # Directory for state-specific files (if you are still keeping those locally)
 DATA_DIR = Path(r"C:\Users\hari\OneDrive\Desktop\Functional PHF")
