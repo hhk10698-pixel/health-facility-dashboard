@@ -1,6 +1,5 @@
 import io
 import json
-import os
 import zipfile
 from pathlib import Path
 from urllib.request import urlopen
@@ -9,21 +8,26 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-
 st.set_page_config(
     page_title="National Health Facility Map",
     layout="wide",
     page_icon="map",
 )
 
-
+# Define the target directory
 DATA_DIR = Path(r"C:\Users\hari\OneDrive\Desktop\Functional PHF")
+
+# Attempt to automatically create the directory if it doesn't exist to prevent path errors
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+
 MASTER_CSV_PATH = DATA_DIR / "master_health_facilities.csv"
 GEOJSON_URL = (
     "https://gist.githubusercontent.com/jbrobst/56c13bbbf9d97d187fea01ca62ea5112/"
     "raw/e388c4cae20aa53cb5090210a42ebb9b765c0a36/india_states.geojson"
 )
-
 
 STATE_NAME_MAP = {
     "Arunachal": "Arunachal Pradesh",
@@ -35,29 +39,44 @@ STATE_NAME_MAP = {
     "Andaman & Nicobar Islands": "Andaman & Nicobar",
 }
 
-
 def normalize_state_name(name):
     if name is None:
         return ""
     cleaned = str(name).strip()
     return STATE_NAME_MAP.get(cleaned, cleaned)
 
+def resolve_master_csv_path():
+    preferred = DATA_DIR / "master_health_facilities.csv"
+    if preferred.exists():
+        return preferred
+
+    if DATA_DIR.exists():
+        candidates = sorted(
+            DATA_DIR.glob("master_health_facilities.*"),
+            key=lambda p: p.suffix.lower(),
+        )
+        for candidate in candidates:
+            if candidate.suffix.lower() in [".csv", ".xlsx", ".xls"]:
+                return candidate
+    return None
 
 @st.cache_data
 def load_geojson():
     with urlopen(GEOJSON_URL) as response:
         return json.load(response)
 
-
 @st.cache_data
-def load_master_data():
-    if not MASTER_CSV_PATH.exists():
+def load_master_data(path_str, signature):
+    path = Path(path_str)
+    if not path.exists():
         return pd.DataFrame()
-    df = pd.read_csv(MASTER_CSV_PATH)
+    if path.suffix.lower() == ".csv":
+        df = pd.read_csv(path)
+    else:
+        df = pd.read_excel(path)
     if "Name of State/UTs" in df.columns:
         df["Name of State/UTs"] = df["Name of State/UTs"].map(normalize_state_name)
     return df
-
 
 @st.cache_data
 def geojson_state_list():
@@ -65,10 +84,11 @@ def geojson_state_list():
     states = sorted({feature["properties"]["ST_NM"] for feature in geojson["features"]})
     return states
 
-
 @st.cache_data
 def state_file_map():
     result = {}
+    if not DATA_DIR.exists():
+        return result
     for file_path in DATA_DIR.glob("*"):
         if not file_path.is_file():
             continue
@@ -80,7 +100,6 @@ def state_file_map():
         result[state_name] = file_path
     return result
 
-
 @st.cache_data
 def load_state_file(path_str):
     path = Path(path_str)
@@ -88,43 +107,61 @@ def load_state_file(path_str):
         return pd.read_csv(path)
     return pd.read_excel(path)
 
-
 @st.cache_data
 def build_state_files_zip():
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(DATA_DIR.glob("*")):
-            if not file_path.is_file():
-                continue
-            if file_path.name.lower() == "master_health_facilities.csv":
-                continue
-            if file_path.suffix.lower() not in [".xlsx", ".xls", ".csv"]:
-                continue
-            zf.write(file_path, arcname=file_path.name)
+    if DATA_DIR.exists():
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in sorted(DATA_DIR.glob("*")):
+                if not file_path.is_file():
+                    continue
+                if file_path.name.lower() == "master_health_facilities.csv":
+                    continue
+                if file_path.suffix.lower() not in [".xlsx", ".xls", ".csv"]:
+                    continue
+                zf.write(file_path, arcname=file_path.name)
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
-
 
 def format_breakdown(group):
     counts = group.value_counts().head(8)
     return ", ".join([f"{k}: {v}" for k, v in counts.items()])
 
+# --- DATA LOADING & FALLBACK LOGIC ---
+resolved_master_path = resolve_master_csv_path()
 
-master_df = load_master_data()
+if resolved_master_path and resolved_master_path.exists():
+    file_signature = f"{resolved_master_path.stat().st_mtime_ns}-{resolved_master_path.stat().st_size}"
+    master_df = load_master_data(str(resolved_master_path), file_signature)
+else:
+    master_df = pd.DataFrame()
+
+# Fallback UI if file is missing (replaces the hard crash)
 if master_df.empty:
-    st.error(
-        f"Master dataset not found at: {MASTER_CSV_PATH}. Please keep the file in that folder."
-    )
-    st.stop()
+    st.warning(f"⚠️ Local master dataset not found at: `{DATA_DIR}`")
+    st.info("💡 **Tip:** Ensure the file is named exactly `master_health_facilities.csv` and placed in the folder above (check that Windows isn't hiding the extension like `.csv.csv`).")
+    st.markdown("---")
+    st.write("**Alternatively, upload the dataset directly to continue:**")
+    
+    uploaded_file = st.file_uploader("Upload Master Dataset", type=['csv', 'xlsx', 'xls'])
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith('.csv'):
+            master_df = pd.read_csv(uploaded_file)
+        else:
+            master_df = pd.read_excel(uploaded_file)
+            
+        if "Name of State/UTs" in master_df.columns:
+            master_df["Name of State/UTs"] = master_df["Name of State/UTs"].map(normalize_state_name)
+    else:
+        st.stop() # Stop execution gracefully until file is uploaded
 
+# Verification
 if "Name of Facility" not in master_df.columns or "Type of Facility (Category)" not in master_df.columns:
-    st.error(
-        "Required columns missing in master CSV. Needed: 'Name of Facility' and "
-        "'Type of Facility (Category)'."
-    )
+    st.error("Required columns missing in master dataset. Needed: 'Name of Facility' and 'Type of Facility (Category)'.")
     st.stop()
 
 
+# --- APP RENDERING ---
 india_geojson = load_geojson()
 all_geojson_states = geojson_state_list()
 state_files = state_file_map()
@@ -140,8 +177,23 @@ filtered_df = (
 )
 
 total_facilities = int(filtered_df["Name of Facility"].count())
-if "District" in filtered_df.columns:
-    total_districts = int(filtered_df["District"].dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique())
+filtered_for_pivot = filtered_df.copy()
+if "District" in filtered_for_pivot.columns:
+    filtered_for_pivot["District"] = (
+        filtered_for_pivot["District"]
+        .astype("string")
+        .str.strip()
+        .replace("", pd.NA)
+    )
+    filtered_for_pivot = filtered_for_pivot.dropna(subset=["District"])
+    if selected_state == "All India":
+        total_districts = int(
+            filtered_for_pivot[["Name of State/UTs", "District"]]
+            .drop_duplicates()
+            .shape[0]
+        )
+    else:
+        total_districts = int(filtered_for_pivot["District"].nunique())
 else:
     total_districts = 0
 
@@ -162,12 +214,23 @@ else:
     with m2:
         st.metric("Total Districts", f"{total_districts}")
 
-st.download_button(
-    label="Download master_health_facilities.csv",
-    data=MASTER_CSV_PATH.read_bytes(),
-    file_name="master_health_facilities.csv",
-    mime="text/csv",
-)
+
+# Safely handle the download button whether it's local or uploaded
+if resolved_master_path and resolved_master_path.exists():
+    st.download_button(
+        label="Download master_health_facilities.csv",
+        data=resolved_master_path.read_bytes(),
+        file_name=resolved_master_path.name,
+        mime="text/csv" if resolved_master_path.suffix.lower() == ".csv" else "application/octet-stream",
+    )
+else:
+    csv_data = master_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download master_health_facilities.csv",
+        data=csv_data,
+        file_name="master_health_facilities.csv",
+        mime="text/csv",
+    )
 
 type_breakdown_df = (
     master_df.groupby("Name of State/UTs")["Type of Facility (Category)"]
@@ -232,9 +295,9 @@ if selected_state == "All India":
 
 st.subheader(f"Facility Distribution: {selected_state}")
 
-if "District" in filtered_df.columns:
+if "District" in filtered_for_pivot.columns:
     pivot_df = pd.pivot_table(
-        filtered_df,
+        filtered_for_pivot,
         values="Name of Facility",
         index=["Name of State/UTs", "District"],
         columns="Type of Facility (Category)",
