@@ -72,6 +72,8 @@ def geojson_state_list():
 @st.cache_data
 def state_file_map():
     result = {}
+    if not DATA_DIR.exists():
+        return result
     for file_path in DATA_DIR.glob("*"):
         if not file_path.is_file():
             continue
@@ -95,15 +97,16 @@ def load_state_file(path_str):
 @st.cache_data
 def build_state_files_zip():
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(DATA_DIR.glob("*")):
-            if not file_path.is_file():
-                continue
-            if file_path.name.lower() == "master_health_facilities.csv":
-                continue
-            if file_path.suffix.lower() not in [".xlsx", ".xls", ".csv"]:
-                continue
-            zf.write(file_path, arcname=file_path.name)
+    if DATA_DIR.exists():
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in sorted(DATA_DIR.glob("*")):
+                if not file_path.is_file():
+                    continue
+                if file_path.name.lower() == "master_health_facilities.csv":
+                    continue
+                if file_path.suffix.lower() not in [".xlsx", ".xls", ".csv"]:
+                    continue
+                zf.write(file_path, arcname=file_path.name)
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
@@ -135,10 +138,13 @@ india_geojson = load_geojson()
 all_geojson_states = geojson_state_list()
 state_files = state_file_map()
 
+# Determine strictly which states have data in the master dataset
+received_states = set(master_df["Name of State/UTs"].dropna().astype(str).unique())
+
 st.title("National Health Facility Explorer")
 
 st.sidebar.header("Filter Details")
-available_states = sorted(master_df["Name of State/UTs"].dropna().astype(str).unique())
+available_states = sorted(list(received_states))
 selected_state = st.sidebar.selectbox("Select State", ["All India"] + available_states)
 
 filtered_df = (
@@ -167,7 +173,6 @@ else:
     total_districts = 0
 
 if selected_state == "All India":
-    received_states = set(state_files.keys())
     received_count = sum(1 for state in all_geojson_states if state in received_states)
     m1, m2, m3 = st.columns(3)
     with m1:
@@ -215,7 +220,8 @@ map_data = map_data.merge(
 )
 map_data["Total Facilities"] = map_data["Total Facilities"].fillna(0).astype(int)
 map_data["Facility Breakup"] = map_data["Facility Breakup"].fillna("No data received")
-map_data["Received"] = map_data["State"].isin(state_files.keys())
+# Check against data actually inside the master dataframe instead of local files
+map_data["Received"] = map_data["State"].isin(received_states)
 map_data["MapValue"] = map_data.apply(
     lambda row: max(int(row["Total Facilities"]), 1) if row["Received"] else 0,
     axis=1,
@@ -223,12 +229,11 @@ map_data["MapValue"] = map_data.apply(
 
 map_max = max(int(map_data["MapValue"].max()), 1)
 red_green_scale = [
-    [0.0, "#d32f2f"],
-    [0.000001, "#d32f2f"],
-    [0.05, "#c8e6c9"],
+    [0.0, "#d32f2f"],       # 0 is distinctly Red
+    [0.000001, "#c8e6c9"],  # The moment it hits >0, jump to Light Green to prevent muddy interpolation
     [0.30, "#81c784"],
     [0.60, "#43a047"],
-    [1.00, "#1b5e20"],
+    [1.00, "#1b5e20"],      # Max is Dark Green
 ]
 
 # =====================================================================
@@ -260,7 +265,6 @@ map_fig.update_layout(height=680, margin={"r": 0, "t": 0, "l": 0, "b": 0})
 
 if selected_state == "All India":
     st.subheader("India Facility Density Map")
-    # Swapped to use_container_width=True for robust rendering across older/newer streamlit versions
     st.plotly_chart(map_fig, use_container_width=True) 
     st.markdown("---")
 
@@ -290,7 +294,8 @@ else:
         raw_df = load_state_file(str(state_path))
     else:
         raw_df = filtered_df
-        st.warning(f"State source file not found for {selected_state} in {DATA_DIR}")
+        # Graceful fallback instead of an aggressive warning
+        st.info(f"Showing integrated data from master dataset.")
 st.dataframe(raw_df, width='stretch')
 
 if selected_state == "All India":
