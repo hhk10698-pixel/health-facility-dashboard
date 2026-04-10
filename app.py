@@ -14,16 +14,14 @@ st.set_page_config(
     page_icon="map",
 )
 
-# Define the target directory
+# ==========================================
+# 🛑 REPLACE THIS WITH YOUR GITHUB RAW URL
+# ==========================================
+MASTER_CSV_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/master_health_facilities.csv"
+
+# Directory for state-specific files (if you are still keeping those locally)
 DATA_DIR = Path(r"C:\Users\hari\OneDrive\Desktop\Functional PHF")
 
-# Attempt to automatically create the directory if it doesn't exist to prevent path errors
-try:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
-
-MASTER_CSV_PATH = DATA_DIR / "master_health_facilities.csv"
 GEOJSON_URL = (
     "https://gist.githubusercontent.com/jbrobst/56c13bbbf9d97d187fea01ca62ea5112/"
     "raw/e388c4cae20aa53cb5090210a42ebb9b765c0a36/india_states.geojson"
@@ -45,20 +43,6 @@ def normalize_state_name(name):
     cleaned = str(name).strip()
     return STATE_NAME_MAP.get(cleaned, cleaned)
 
-def resolve_master_csv_path():
-    preferred = DATA_DIR / "master_health_facilities.csv"
-    if preferred.exists():
-        return preferred
-
-    if DATA_DIR.exists():
-        candidates = sorted(
-            DATA_DIR.glob("master_health_facilities.*"),
-            key=lambda p: p.suffix.lower(),
-        )
-        for candidate in candidates:
-            if candidate.suffix.lower() in [".csv", ".xlsx", ".xls"]:
-                return candidate
-    return None
 
 @st.cache_data
 def load_geojson():
@@ -66,17 +50,16 @@ def load_geojson():
         return json.load(response)
 
 @st.cache_data
-def load_master_data(path_str, signature):
-    path = Path(path_str)
-    if not path.exists():
+def load_master_data_from_github(url):
+    try:
+        # Pandas can read directly from a URL!
+        df = pd.read_csv(url)
+        if "Name of State/UTs" in df.columns:
+            df["Name of State/UTs"] = df["Name of State/UTs"].map(normalize_state_name)
+        return df
+    except Exception as e:
+        st.error(f"Failed to load master dataset from GitHub. Error: {e}")
         return pd.DataFrame()
-    if path.suffix.lower() == ".csv":
-        df = pd.read_csv(path)
-    else:
-        df = pd.read_excel(path)
-    if "Name of State/UTs" in df.columns:
-        df["Name of State/UTs"] = df["Name of State/UTs"].map(normalize_state_name)
-    return df
 
 @st.cache_data
 def geojson_state_list():
@@ -127,35 +110,15 @@ def format_breakdown(group):
     counts = group.value_counts().head(8)
     return ", ".join([f"{k}: {v}" for k, v in counts.items()])
 
-# --- DATA LOADING & FALLBACK LOGIC ---
-resolved_master_path = resolve_master_csv_path()
 
-if resolved_master_path and resolved_master_path.exists():
-    file_signature = f"{resolved_master_path.stat().st_mtime_ns}-{resolved_master_path.stat().st_size}"
-    master_df = load_master_data(str(resolved_master_path), file_signature)
-else:
-    master_df = pd.DataFrame()
+# --- DATA LOADING ---
+with st.spinner("Fetching data from GitHub..."):
+    master_df = load_master_data_from_github(MASTER_CSV_URL)
 
-# Fallback UI if file is missing (replaces the hard crash)
 if master_df.empty:
-    st.warning(f"⚠️ Local master dataset not found at: `{DATA_DIR}`")
-    st.info("💡 **Tip:** Ensure the file is named exactly `master_health_facilities.csv` and placed in the folder above (check that Windows isn't hiding the extension like `.csv.csv`).")
-    st.markdown("---")
-    st.write("**Alternatively, upload the dataset directly to continue:**")
-    
-    uploaded_file = st.file_uploader("Upload Master Dataset", type=['csv', 'xlsx', 'xls'])
-    if uploaded_file is not None:
-        if uploaded_file.name.endswith('.csv'):
-            master_df = pd.read_csv(uploaded_file)
-        else:
-            master_df = pd.read_excel(uploaded_file)
-            
-        if "Name of State/UTs" in master_df.columns:
-            master_df["Name of State/UTs"] = master_df["Name of State/UTs"].map(normalize_state_name)
-    else:
-        st.stop() # Stop execution gracefully until file is uploaded
+    st.error("Could not load the dataset. Please double-check that your `MASTER_CSV_URL` is a valid, raw GitHub URL.")
+    st.stop()
 
-# Verification
 if "Name of Facility" not in master_df.columns or "Type of Facility (Category)" not in master_df.columns:
     st.error("Required columns missing in master dataset. Needed: 'Name of Facility' and 'Type of Facility (Category)'.")
     st.stop()
@@ -214,23 +177,14 @@ else:
     with m2:
         st.metric("Total Districts", f"{total_districts}")
 
-
-# Safely handle the download button whether it's local or uploaded
-if resolved_master_path and resolved_master_path.exists():
-    st.download_button(
-        label="Download master_health_facilities.csv",
-        data=resolved_master_path.read_bytes(),
-        file_name=resolved_master_path.name,
-        mime="text/csv" if resolved_master_path.suffix.lower() == ".csv" else "application/octet-stream",
-    )
-else:
-    csv_data = master_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download master_health_facilities.csv",
-        data=csv_data,
-        file_name="master_health_facilities.csv",
-        mime="text/csv",
-    )
+# Generate CSV download directly from the fetched dataframe
+csv_data = master_df.to_csv(index=False).encode('utf-8')
+st.download_button(
+    label="Download master_health_facilities.csv",
+    data=csv_data,
+    file_name="master_health_facilities.csv",
+    mime="text/csv",
+)
 
 type_breakdown_df = (
     master_df.groupby("Name of State/UTs")["Type of Facility (Category)"]
@@ -319,7 +273,7 @@ else:
         raw_df = load_state_file(str(state_path))
     else:
         raw_df = filtered_df
-        st.warning(f"State source file not found for {selected_state} in {DATA_DIR}")
+        st.warning(f"Local state source file not found for {selected_state} in {DATA_DIR}")
 st.dataframe(raw_df, width='stretch')
 
 if selected_state == "All India":
@@ -405,7 +359,6 @@ else:
             title=f"{selected_state}: Facility Type Breakup",
         )
         st.plotly_chart(pie_fig, width='stretch')
-        st.info("District column not found, so district-wise stacked chart cannot be shown.")
     else:
         district_stack_df = (
             filtered_df.assign(
